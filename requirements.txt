@@ -1,0 +1,4 @@
+flask
+requests
+redis==5.0.4
+gunicorn

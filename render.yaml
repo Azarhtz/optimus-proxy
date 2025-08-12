@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: optimus-proxy
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w 2 -k gthread -t 120 -b 0.0.0.0:$PORT render_app:app
+    envVars:
+      - key: PUBLIC_API_KEY     # clave de clientes hacia Render
+        sync: false
+      - key: UPSTREAM_API_KEY   # = API_KEY de tu Flask (x-api-key)
+        sync: false
+      - key: ADMIN_TOKEN        # para /admin/register
+        sync: false
+      - key: REDIS_URL          # opcional; si no lo pones, usa memoria
+        sync: false
