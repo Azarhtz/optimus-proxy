@@ -17,14 +17,13 @@ CLIENT_API_KEY   = os.getenv("PUBLIC_API_KEY", "")      # clave que enviarán lo
 UPSTREAM_API_KEY = os.getenv("UPSTREAM_API_KEY", "")    # la que espera TU Flask (x-api-key)
 ADMIN_TOKEN      = os.getenv("ADMIN_TOKEN", "")         # token para /admin/register
 REDIS_URL        = os.getenv("REDIS_URL", "")           # opcional (si no hay, se usa memoria)
+DEBUG_HEADERS    = os.getenv("DEBUG_HEADERS", "0") == "1"  # <--- NUEVO: logs opcionales
 
 # === Orígenes permitidos para CORS ===
-# Puedes definir ALLOWED_ORIGINS en Render (separado por comas) para no tocar código.
 origins_env = os.getenv("ALLOWED_ORIGINS", "").strip()
 if origins_env:
     ALLOWED_ORIGINS = [o.strip() for o in origins_env.split(",") if o.strip()]
 else:
-    # Defaults (ajusta a tus dominios)
     ALLOWED_ORIGINS = [
         "https://www.consorcio-chilca.build-ness.com",
         "http://localhost:5173",
@@ -39,7 +38,8 @@ CORS(
         r"/health": {"origins": "*"},  # útil para pruebas
     },
     methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "x-client-key"],
+    # ✨ SUMA: permitir también x-optimus-model y x-optimus-alias
+    allow_headers=["Content-Type", "x-client-key", "x-optimus-model", "x-optimus-alias"],
     supports_credentials=False,
 )
 
@@ -83,7 +83,7 @@ def register():
 
 @app.route("/webhook/optimus", methods=["POST", "OPTIONS"])
 def proxy_optimus():
-    # Preflight CORS (OPTIONS). Flask-CORS agrega los headers; devolvemos 204.
+    # Preflight CORS (OPTIONS)
     if request.method == "OPTIONS":
         return ("", 204)
 
@@ -97,16 +97,31 @@ def proxy_optimus():
 
     upstream_url = f"{upstream_base}/webhook/optimus"
 
+    # ✨ SUMA: reenviar headers útiles tal cual, + añadir x-api-key para el backend
+    forward_headers = {}
+    for k, v in request.headers.items():
+        lk = k.lower()
+        # No pasamos estos hop-by-hop ni la clave pública al backend
+        if lk in ("host", "content-length", "content-encoding", "transfer-encoding", "connection"):
+            continue
+        if lk == "x-client-key":
+            continue
+        forward_headers[k] = v
+    # Forzamos Content-Type si no viene y añadimos la firma interna
+    forward_headers["Content-Type"] = request.headers.get("Content-Type", "application/json")
+    forward_headers["x-api-key"] = UPSTREAM_API_KEY
+
+    if DEBUG_HEADERS:
+        try:
+            print(">> proxy → backend headers:", json.dumps({k: forward_headers[k] for k in sorted(forward_headers)}, ensure_ascii=False))
+        except Exception:
+            pass
+
     # reenviamos el JSON tal cual llega
     raw = request.get_data()
-    headers = {
-        "Content-Type": request.headers.get("Content-Type", "application/json"),
-        "x-api-key": UPSTREAM_API_KEY,  # la que valida tu Flask local
-    }
-
     try:
         # si tu IA tarda, puedes subir el timeout
-        resp = requests.post(upstream_url, data=raw, headers=headers, timeout=60)
+        resp = requests.post(upstream_url, data=raw, headers=forward_headers, timeout=120)
         return Response(
             resp.content,
             status=resp.status_code,
